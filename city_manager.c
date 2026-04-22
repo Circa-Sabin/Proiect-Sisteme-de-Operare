@@ -128,7 +128,7 @@ void do_add(){
 
     Report report;
 
-    memset(&report, 0, sizeof(Report)); // curatare memorie 
+    memset(&report, 0, sizeof(Report)); // curatare memorie
 
     printf("Introduceti latitudinea X: ");
     scanf("%f", &report.latitude);
@@ -158,10 +158,12 @@ void do_add(){
     }
 
     int marime_fisier = lseek(fd, 0, SEEK_END); // lseek arata marimea totala a fisierului in bytes
-    report.id = marime_fisier / sizeof(Report) + 1; 
+    report.id = marime_fisier / sizeof(Report) + 1;
 
     write(fd, &report, sizeof(Report));
     close(fd);
+
+    printf("S-a facut un raport in districtul %s care are ID-ul %d\n", district, report.id);
 };
 
 void printeaza_bucata(int cifra) {
@@ -222,10 +224,10 @@ void do_list(){
         printf("GPS: %.2f, %.2f | Categoria: %s\n", report.latitude, report.longitude, report.category);
         printf("Descriere: %s\n", report.description);
         printf("\n");
-    }   
+    }
 
     if(numar_rapoarte == 0) {
-        printf("Nu exista rapoarte in districtul s%s.\n", district);
+        printf("Nu exista rapoarte in districtul %s.\n", district);
     }
 
     close(fd);
@@ -250,10 +252,10 @@ void do_view(){
     int raport_gasit = 0;
 
     while (read(fd, &report, sizeof(Report)) == sizeof(Report)) {
-        
+
         if(report.id == target_id){
             raport_gasit = 1;
-        
+
 
             printf("\n DETALII RAPORT ID %d\n", report.id);
             printf("Inspector: %s\n", report.inspector_name);
@@ -264,7 +266,7 @@ void do_view(){
             printf("Descriere: %s\n", report.description);
             printf("\n");
             break;
-    
+
         }
     }
 
@@ -275,7 +277,61 @@ void do_view(){
     close(fd);
 }
 
-void do_remove_report(){};
+void do_remove_report() {
+    int target_id = atoi(variabila_extra);
+
+    printf("Incerc sa sterg raportul %d\n", target_id);
+
+
+    char filepath[150];
+
+    sprintf(filepath, "%s/reports.dat", district);
+
+    int fd= open(filepath, O_RDWR);
+    if (fd == -1) {
+        perror("Nu am gasit fisierul vechi!\n");
+        return;
+    }
+
+    Report r;
+
+    int gasit = 0;
+
+    off_t pozitie_gasit = 0; //salvam locul exact unde e raportul pe care l vrem sters
+
+    while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+        if (r.id == target_id) {
+            gasit = 1;
+            pozitie_gasit = lseek(fd,0,SEEK_CUR) - sizeof(Report);
+            break;
+        }
+    }
+    if (gasit == 0) {
+        printf("Nu am gasit raportul %d!\n", target_id);
+        close(fd);
+        return;
+    }
+
+    off_t read_cursor = lseek(fd,0,SEEK_CUR);
+
+    off_t write_cursor = pozitie_gasit;
+
+    while (1) {
+        lseek(fd,read_cursor,SEEK_SET);
+        if (read(fd,&r,sizeof(Report)) < sizeof(Report)) {
+            break;
+        }
+        lseek(fd,write_cursor,SEEK_SET);
+        write(fd,&r,sizeof(Report));
+
+        read_cursor += sizeof(Report);
+        write_cursor += sizeof(Report);
+    }
+
+    ftruncate(fd,write_cursor);
+    close(fd);
+    printf("Raportul cu id %d a fost sters cu succes\n", target_id);
+};
 
 void do_update_threshold(){};
 

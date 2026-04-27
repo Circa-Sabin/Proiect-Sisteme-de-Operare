@@ -128,7 +128,7 @@ void do_add(){
 
     Report report;
 
-    memset(&report, 0, sizeof(Report)); // curatare memorie
+    memset(&report, 0, sizeof(Report)); // curatare memorie 
 
     printf("Introduceti latitudinea X: ");
     scanf("%f", &report.latitude);
@@ -158,12 +158,10 @@ void do_add(){
     }
 
     int marime_fisier = lseek(fd, 0, SEEK_END); // lseek arata marimea totala a fisierului in bytes
-    report.id = marime_fisier / sizeof(Report) + 1;
+    report.id = marime_fisier / sizeof(Report) + 1; 
 
     write(fd, &report, sizeof(Report));
     close(fd);
-
-    printf("S-a facut un raport in districtul %s care are ID-ul %d\n", district, report.id);
 };
 
 void printeaza_bucata(int cifra) {
@@ -224,10 +222,10 @@ void do_list(){
         printf("GPS: %.2f, %.2f | Categoria: %s\n", report.latitude, report.longitude, report.category);
         printf("Descriere: %s\n", report.description);
         printf("\n");
-    }
+    }   
 
     if(numar_rapoarte == 0) {
-        printf("Nu exista rapoarte in districtul %s.\n", district);
+        printf("Nu exista rapoarte in districtul s%s.\n", district);
     }
 
     close(fd);
@@ -252,10 +250,10 @@ void do_view(){
     int raport_gasit = 0;
 
     while (read(fd, &report, sizeof(Report)) == sizeof(Report)) {
-
+        
         if(report.id == target_id){
             raport_gasit = 1;
-
+        
 
             printf("\n DETALII RAPORT ID %d\n", report.id);
             printf("Inspector: %s\n", report.inspector_name);
@@ -266,7 +264,7 @@ void do_view(){
             printf("Descriere: %s\n", report.description);
             printf("\n");
             break;
-
+    
         }
     }
 
@@ -277,7 +275,8 @@ void do_view(){
     close(fd);
 }
 
-void do_remove_report() {
+void do_remove_report(){
+
     int target_id = atoi(variabila_extra);
 
     printf("Incerc sa sterg raportul %d\n", target_id);
@@ -333,9 +332,64 @@ void do_remove_report() {
     printf("Raportul cu id %d a fost sters cu succes\n", target_id);
 };
 
-void do_update_threshold(){};
+void do_update_threshold() {
+    // Luam noul prag din comanda din terminal
+    int nou_prag = atoi(variabila_extra); 
 
-void do_filter(){};
+    char filepath[150];
+    sprintf(filepath, "%s/threshold.dat", district);
+
+    // Deschidem fisierul cu O_TRUNC (daca exista deja un prag vechi, il stergem si suprascriem)
+    int fd = open(filepath, O_CREAT | O_WRONLY | O_TRUNC, 0664);
+    if (fd == -1) {
+        printf("Eroare: Nu am putut actualiza pragul in districtul %s.\n", district);
+        return;
+    }
+
+    // Scriem numarul direct in format binar
+    write(fd, &nou_prag, sizeof(int));
+    close(fd);
+
+    printf("Pragul de severitate pentru districtul %s a fost actualizat cu succes la %d.\n", district, nou_prag);
+}
+
+void do_filter() {
+    int prag_cerut = atoi(variabila_extra); 
+
+    char filepath[150];
+    sprintf(filepath, "%s/reports.dat", district);
+
+    // Deschidem baza de date strict pentru citire
+    int fd = open(filepath, O_RDONLY);
+    if (fd == -1) {
+        printf("Eroare: Nu am gasit rapoarte in districtul %s.\n", district);
+        return;
+    }
+
+    Report r;
+    int rapoarte_gasite = 0;
+
+    printf("\n=== RAPOARTE CU SEVERITATE >= %d IN %s ===\n", prag_cerut, district);
+
+    // Citim fiecare dosar in parte
+    while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+        
+        // AICI ESTE FILTRUL! Verifica conditia inainte sa afiseze
+        if (r.severity >= prag_cerut) {
+            // Poti adauga mai multe detalii (x, y, descriere) in printf, cum ai nevoie
+            printf("ID: %d | Severitate: %d \n", r.id, r.severity);
+            rapoarte_gasite++;
+        }
+    }
+
+    // Mesaj pentru cazul in care n-am gasit absolut nimic grav
+    if (rapoarte_gasite == 0) {
+        printf("Nu s-a gasit niciun raport care sa atinga pragul %d.\n", prag_cerut);
+    }
+    printf("======================================\n");
+
+    close(fd);
+}
 
 
 

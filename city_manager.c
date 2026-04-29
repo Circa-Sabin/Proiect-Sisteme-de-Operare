@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <string.h>
 #include <dirent.h>
 #include <time.h>
@@ -83,6 +84,11 @@ void get_argv(int argc, char *argv[]) {
             strcpy(district, argv[i + 1]);
             strcpy(variabila_extra, argv[i + 2]);
         }
+
+        else if (strcmp(argv[i], "--remove_district") == 0 && i + 1 < argc) {
+            strcpy(command, "remove_district");
+            strcpy(district, argv[i + 1]);
+        }
     }
 }
 
@@ -128,7 +134,7 @@ void do_add(){
 
     Report report;
 
-    memset(&report, 0, sizeof(Report)); // curatare memorie 
+    memset(&report, 0, sizeof(Report)); // curatare memorie
 
     printf("Introduceti latitudinea X: ");
     scanf("%f", &report.latitude);
@@ -158,7 +164,7 @@ void do_add(){
     }
 
     int marime_fisier = lseek(fd, 0, SEEK_END); // lseek arata marimea totala a fisierului in bytes
-    report.id = marime_fisier / sizeof(Report) + 1; 
+    report.id = marime_fisier / sizeof(Report) + 1;
 
     write(fd, &report, sizeof(Report));
     close(fd);
@@ -222,7 +228,7 @@ void do_list(){
         printf("GPS: %.2f, %.2f | Categoria: %s\n", report.latitude, report.longitude, report.category);
         printf("Descriere: %s\n", report.description);
         printf("\n");
-    }   
+    }
 
     if(numar_rapoarte == 0) {
         printf("Nu exista rapoarte in districtul s%s.\n", district);
@@ -250,10 +256,10 @@ void do_view(){
     int raport_gasit = 0;
 
     while (read(fd, &report, sizeof(Report)) == sizeof(Report)) {
-        
+
         if(report.id == target_id){
             raport_gasit = 1;
-        
+
 
             printf("\n DETALII RAPORT ID %d\n", report.id);
             printf("Inspector: %s\n", report.inspector_name);
@@ -264,7 +270,7 @@ void do_view(){
             printf("Descriere: %s\n", report.description);
             printf("\n");
             break;
-    
+
         }
     }
 
@@ -333,65 +339,152 @@ void do_remove_report(){
 };
 
 void do_update_threshold() {
-    // Luam noul prag din comanda din terminal
-    int nou_prag = atoi(variabila_extra); 
-
-    char filepath[150];
-    sprintf(filepath, "%s/threshold.dat", district);
-
-    // Deschidem fisierul cu O_TRUNC (daca exista deja un prag vechi, il stergem si suprascriem)
-    int fd = open(filepath, O_CREAT | O_WRONLY | O_TRUNC, 0664);
-    if (fd == -1) {
-        printf("Eroare: Nu am putut actualiza pragul in districtul %s.\n", district);
+    // Verificam rolul: doar managerul are voie!
+    if (strcmp(role, "manager") != 0) {
+        printf("Eroare: Doar utilizatorii cu rolul 'manager' pot actualiza pragul!\n");
         return;
     }
 
-    // Scriem numarul direct in format binar
+    char filepath[150];
+    sprintf(filepath, "%s/district.cfg", district); // Scriem in district.cfg, nu in threshold.dat
+
+    // Verificam permisiunile cu stat()
+    struct stat st;
+    if (stat(filepath, &st) == -1) {
+        printf("Eroare: Nu am putut gasi fisierul %s.\n", filepath);
+        return;
+    }
+
+    // Extragem doar bitii de permisiune (ultimii 9 biti)
+    mode_t permisiuni = st.st_mode & 0777;
+
+    if (permisiuni != 0640) {
+        // Daca cineva a umblat la permisiuni, refuzam si printam un diagnostic (cum cere PDF-ul)
+        printf("Diagnostic: Permisiunile fisierului %s au fost modificate (sunt %o, ar trebui sa fie 640). Refuz actualizarea.\n", filepath, permisiuni);
+        return;
+    }
+
+    // Luam noul prag
+    int nou_prag = atoi(variabila_extra);
+
+    // Deschidem fisierul DOAR pentru scriere, stergand ce era inainte (O_TRUNC)
+    int fd = open(filepath, O_WRONLY | O_TRUNC);
+    if (fd == -1) {
+        printf("Eroare: Nu am putut deschide %s pentru scriere.\n", filepath);
+        return;
+    }
+
     write(fd, &nou_prag, sizeof(int));
     close(fd);
 
-    printf("Pragul de severitate pentru districtul %s a fost actualizat cu succes la %d.\n", district, nou_prag);
+    printf("Pragul de severitate pentru %s a fost actualizat cu succes la %d.\n", district, nou_prag);
+}
+
+int parse_condition(const char *input, char *field, char *op, char * value) {
+    int bucati_gasite = sscanf(input,"%[^:]:%[^:]:%s", field, op, value);
+    if (bucati_gasite == 3) {
+        return 1;
+    }
+    return 0;
+}
+
+int match_condition(Report *r, const char *field, const char *op, const char *value) {
+    // Daca filtram dupa SEVERITATE (int)
+    if (strcmp(field, "severity") == 0) {
+        int val_cautata = atoi(value);
+        if (strcmp(op, "==") == 0) return r->severity == val_cautata;
+        if (strcmp(op, "!=") == 0) return r->severity != val_cautata;
+        if (strcmp(op, "<") == 0) return r->severity < val_cautata;
+        if (strcmp(op, "<=") == 0) return r->severity <= val_cautata;
+        if (strcmp(op, ">") == 0) return r->severity > val_cautata;
+        if (strcmp(op, ">=") == 0) return r->severity >= val_cautata;
+    }
+    // Daca filtram dupa CATEGORIE (string)
+    else if (strcmp(field, "category") == 0) {
+        if (strcmp(op, "==") == 0) return strcmp(r->category, value) == 0;
+        if (strcmp(op, "!=") == 0) return strcmp(r->category, value) != 0;
+    }
+    // Daca filtram dupa INSPECTOR (string)
+    else if (strcmp(field, "inspector") == 0) {
+        if (strcmp(op, "==") == 0) return strcmp(r->inspector_name, value) == 0;
+        if (strcmp(op, "!=") == 0) return strcmp(r->inspector_name, value) != 0;
+    }
+
+    return 0; // Nu s-a gasit campul sau operatorul
 }
 
 void do_filter() {
-    int prag_cerut = atoi(variabila_extra); 
-
     char filepath[150];
     sprintf(filepath, "%s/reports.dat", district);
 
-    // Deschidem baza de date strict pentru citire
     int fd = open(filepath, O_RDONLY);
     if (fd == -1) {
         printf("Eroare: Nu am gasit rapoarte in districtul %s.\n", district);
         return;
     }
 
+    // Variabile pentru a stoca rezultatul spargerii conditiei
+    char field[50], op[10], value[100];
+
+    // Spargem sirul din "variabila_extra" folosind functia generata
+    if (!parse_condition(variabila_extra, field, op, value)) {
+        printf("Eroare: Conditia '%s' nu respecta formatul field:operator:value\n", variabila_extra);
+        close(fd);
+        return;
+    }
+
     Report r;
     int rapoarte_gasite = 0;
 
-    printf("\n=== RAPOARTE CU SEVERITATE >= %d IN %s ===\n", prag_cerut, district);
+    printf("\n=== RAPOARTE CARE RESPECTA CONDITIA: %s %s %s ===\n", field, op, value);
 
-    // Citim fiecare dosar in parte
     while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
-        
-        // AICI ESTE FILTRUL! Verifica conditia inainte sa afiseze
-        if (r.severity >= prag_cerut) {
-            // Poti adauga mai multe detalii (x, y, descriere) in printf, cum ai nevoie
-            printf("ID: %d | Severitate: %d \n", r.id, r.severity);
+
+        // Verificam folosind functia generata
+        if (match_condition(&r, field, op, value) == 1) {
+            printf("ID: %d | Severitate: %d | Categorie: %s | Inspector: %s\n",
+            r.id, r.severity, r.category, r.inspector_name);
             rapoarte_gasite++;
         }
     }
 
-    // Mesaj pentru cazul in care n-am gasit absolut nimic grav
     if (rapoarte_gasite == 0) {
-        printf("Nu s-a gasit niciun raport care sa atinga pragul %d.\n", prag_cerut);
+        printf("Nu s-a gasit niciun raport care sa corespunda.\n");
     }
-    printf("======================================\n");
+    printf("===================================================\n");
 
     close(fd);
 }
 
 
+
+void do_remove_district() {
+    if (strcmp(role, "manager") != 0) {
+        printf("Eroare: doar managerii");
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("Eroare: fork");
+        return;
+    }
+    else if (pid == 0) {
+        execlp("rm", "rm", "-rf", district, NULL);
+        perror("Eroare: execlp");
+        exit(1);
+    }
+    else {
+        int status;
+        waitpid(pid, &status, 0);
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+            printf("Districtul '%s' a fost sters cu succes\n", district);
+        }
+        else {
+            printf("eroare la stergerea districtului '%s'.\n", district );
+        }
+    }
+}
 
 int main(int argc, char *argv[]) {
 
@@ -426,6 +519,10 @@ int main(int argc, char *argv[]) {
 
     else if (strcmp(command, "filter") == 0) {
         do_filter();
+    }
+
+    else if (strcmp(command, "remove_district") == 0) {
+        do_remove_district();
     }
 
     else {

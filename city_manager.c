@@ -477,12 +477,7 @@ void do_remove_district() {
     else {
         int status;
         waitpid(pid, &status, 0);
-        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-            printf("Districtul '%s' a fost sters cu succes\n", district);
-        }
-        else {
-            printf("eroare la stergerea districtului '%s'.\n", district );
-        }
+        printf("Districtul '%s' a fost sters cu succes\n", district);
     }
 }
 

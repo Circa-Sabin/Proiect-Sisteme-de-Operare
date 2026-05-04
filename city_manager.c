@@ -94,6 +94,45 @@ void get_argv(int argc, char *argv[]) {
 
 // logica comenzilor
 
+void check_symlinks() {
+    // Deschidem folderul curent (".")
+    DIR *dir = opendir(".");
+    if (dir == NULL) {
+        return;
+    }
+
+    struct dirent *entry;
+    
+    // Parcurgem toate fisierele din folderul curent
+    while ((entry = readdir(dir)) != NULL) {
+        
+        // Cautam doar fisierele care incep cu "active_reports-"
+        if (strncmp(entry->d_name, "active_reports-", 15) == 0) {
+            
+            struct stat sym_stat;
+            // PDF cere specific lstat() pentru a examina link-ul insusi, nu fisierul la care arata
+            if (lstat(entry->d_name, &sym_stat) == 0) {
+                
+                // Verificam daca este intr-adevar un symlink (folosind macroul S_ISLNK)
+                if (S_ISLNK(sym_stat.st_mode)) {
+                    
+                    // Acum incercam sa folosim stat() normal pentru a vedea daca tinta mai exista
+                    struct stat target_stat;
+                    if (stat(entry->d_name, &target_stat) == -1) {
+                        // stat() da rateu daca fisierul tinta nu mai exista
+                        printf("Avertisment: Link-ul simbolic '%s' este 'dangling' (fisierul tinta lipseste).\n", entry->d_name);
+                        
+                        // Oprional: Daca vrei sa fii extra ordonat, poti sa si stergi link-ul mort:
+                        // unlink(entry->d_name);
+                    }
+                }
+            }
+        }
+    }
+    
+    closedir(dir);
+}
+
 void do_district() {
 
     mkdir(district, 0750);
@@ -128,6 +167,19 @@ void do_district() {
         close(fd_log);
     }
     chmod(filepath, 0644);
+
+    char symlink_name[150];
+    sprintf(symlink_name, "active_reports-%s", district);
+
+    char target_path[150];
+    sprintf(target_path, "%s/reports.dat", district);
+
+    if(symlink(target_path, symlink_name) == -1) {
+        if (errno != EEXIST) {
+            perror("Eroare la crearea symlink-ului!");
+        }
+    }
+
 };
 
 void do_add(){
@@ -168,6 +220,8 @@ void do_add(){
 
     write(fd, &report, sizeof(Report));
     close(fd);
+
+    printf("\nRaport cu ID %d a fost adaugat cu succes in districtul '%s'!\n", report.id, district);
 };
 
 void printeaza_bucata(int cifra) {
@@ -374,7 +428,10 @@ void do_update_threshold() {
         return;
     }
 
-    write(fd, &nou_prag, sizeof(int));
+    char buffer_text[150];
+    sprintf(buffer_text, "%s\n", variabila_extra);
+
+    write(fd, buffer_text, strlen(buffer_text));
     close(fd);
 
     printf("Pragul de severitate pentru %s a fost actualizat cu succes la %d.\n", district, nou_prag);
@@ -485,6 +542,8 @@ int main(int argc, char *argv[]) {
 
     get_argv(argc, argv);
 
+    check_symlinks();
+
     if (strlen(role) == 0 || strlen(command) == 0 || strlen(district) == 0) {
         printf("Error at the arguments\n");
         return -1;
@@ -523,6 +582,47 @@ int main(int argc, char *argv[]) {
     else {
 
         printf("Invalid Command : %s\n", command);
+        return -1;
+    }
+
+    char log_filepath[150];
+    sprintf(log_filepath, "%s/logged_district", district);
+
+    struct stat st;
+
+    if(stat(log_filepath, &st) != -1) {
+
+        int are_voie_sa_scrie = 0;
+
+        // Verificam strict permisiunile folosind MACROURI din st_mode, asa cum cere PDF-ul
+        if (strcmp(role, "manager") == 0) {
+            if (st.st_mode & S_IWUSR) { // S_IWUSR verifica daca Owner-ul (Managerul) are drept de scriere
+                are_voie_sa_scrie = 1;
+            }
+        } 
+        else if (strcmp(role, "inspector") == 0) {
+            if (st.st_mode & S_IWGRP) { // S_IWGRP verifica daca Grupul (Inspectorul) are drept de scriere
+                are_voie_sa_scrie = 1;
+            }
+        }
+
+        // Daca nu are permisiunea, detectam si refuzam cu un mesaj clar
+        if (are_voie_sa_scrie == 0) {
+            printf("Avertisment permisiuni: Rolul '%s' nu are drept de scriere in logged_district!\n", role);
+        } 
+        else {
+            // Daca are voie, deschidem si scriem (O_APPEND ca sa adaugam la final)
+            int fd_log = open(log_filepath, O_WRONLY | O_APPEND);
+            if (fd_log != -1) {
+                char log_entry[300];
+                // Construim textul log-ului: timestamp, user, rol comanda
+                sprintf(log_entry, "%ld\n%s\n%s %s\n", time(NULL), user, role, command);
+                
+                write(fd_log, log_entry, strlen(log_entry));
+                close(fd_log);
+            }
+        }
+
     }
 
     return 0;

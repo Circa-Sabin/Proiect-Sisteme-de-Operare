@@ -8,6 +8,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <time.h>
+#include <signal.h>
 
 
 #define MAX_NAME 50
@@ -102,34 +103,31 @@ void check_symlinks() {
     }
 
     struct dirent *entry;
-    
+
     // Parcurgem toate fisierele din folderul curent
     while ((entry = readdir(dir)) != NULL) {
-        
+
         // Cautam doar fisierele care incep cu "active_reports-"
         if (strncmp(entry->d_name, "active_reports-", 15) == 0) {
-            
+
             struct stat sym_stat;
             // PDF cere specific lstat() pentru a examina link-ul insusi, nu fisierul la care arata
             if (lstat(entry->d_name, &sym_stat) == 0) {
-                
+
                 // Verificam daca este intr-adevar un symlink (folosind macroul S_ISLNK)
                 if (S_ISLNK(sym_stat.st_mode)) {
-                    
+
                     // Acum incercam sa folosim stat() normal pentru a vedea daca tinta mai exista
                     struct stat target_stat;
                     if (stat(entry->d_name, &target_stat) == -1) {
                         // stat() da rateu daca fisierul tinta nu mai exista
                         printf("Avertisment: Link-ul simbolic '%s' este 'dangling' (fisierul tinta lipseste).\n", entry->d_name);
-                        
-                        // Oprional: Daca vrei sa fii extra ordonat, poti sa si stergi link-ul mort:
-                        // unlink(entry->d_name);
                     }
                 }
             }
         }
     }
-    
+
     closedir(dir);
 }
 
@@ -176,7 +174,7 @@ void do_district() {
 
     if(symlink(target_path, symlink_name) == -1) {
         if (errno != EEXIST) {
-            perror("Eroare la crearea symlink-ului!");
+            perror("Error at the symlink\n!");
         }
     }
 
@@ -188,19 +186,19 @@ void do_add(){
 
     memset(&report, 0, sizeof(Report)); // curatare memorie
 
-    printf("Introduceti latitudinea X: ");
+    printf("Introduce lat X: ");
     scanf("%f", &report.latitude);
 
-    printf("Introduceti longitudinea Y: ");
+    printf("Introduce long Y: ");
     scanf("%f", &report.longitude);
 
-    printf("Introduceti categoria problemei: ");
+    printf("Introduce problem category: ");
     scanf("%s", report.category);
 
-    printf("Introduceti severitatea (1 = minor, 2 = moderate, 3 = critical): ");
+    printf("Introduce severity (1 = minor, 2 = moderate, 3 = critical): ");
     scanf("%d", &report.severity);
 
-    printf("Introduceti o descriere a problemei: ");
+    printf("Introduce problem description: ");
     scanf(" %[^\n]", report.description);
 
     strcpy(report.inspector_name, user);
@@ -211,7 +209,7 @@ void do_add(){
     int fd = open(filepath, O_WRONLY | O_APPEND); // O_APPEND pentru a adauga la finalul fisierului
 
     if(fd == -1) {
-        perror("Eroare la deschiderea fisierului reports.dat!\n");
+        perror("Error at opening the file reports.dat!\n");
         return;
     }
 
@@ -221,7 +219,48 @@ void do_add(){
     write(fd, &report, sizeof(Report));
     close(fd);
 
-    printf("\nRaport cu ID %d a fost adaugat cu succes in districtul '%s'!\n", report.id, district);
+    printf("\nThe Report with ID %d was added with succes in district '%s'!\n", report.id, district);
+
+    int notificare_trimisa = 0; // O folosim ca sa stim daca a avut succes sau nu
+
+    // 1. Incercam sa deschidem fisierul ascuns .monitor_pid
+    FILE *pid_file = fopen(".monitor_pid", "r");
+    if (pid_file != NULL) {
+        pid_t monitor_pid;
+
+        // 2. Citim PID-ul din fisier
+        if (fscanf(pid_file, "%d", &monitor_pid) == 1) {
+
+            // 3. Trimitem semnalul SIGUSR1 catre procesul monitor
+            // kill() returneaza 0 daca semnalul a ajuns cu succes
+            if (kill(monitor_pid, SIGUSR1) == 0) {
+                notificare_trimisa = 1;
+                printf("Semnal trimis catre monitorul cu PID-ul %d.\n", monitor_pid);
+            }
+        }
+        fclose(pid_file);
+    }
+
+    // 4. Scriem in jurnalul districtului (logged_district) rezultatul notificarii
+    char log_filepath[150];
+    sprintf(log_filepath, "%s/logged_district", district);
+
+    // Incercam sa deschidem log-ul. Daca suntem Inspector, open() va returna -1
+    // pentru ca nu avem drept de scriere (ceea ce e corect conform Fazei 1)
+    int fd_log = open(log_filepath, O_WRONLY | O_APPEND);
+    if (fd_log != -1) {
+        char mesaj_notificare[200];
+
+        if (notificare_trimisa == 1) {
+            sprintf(mesaj_notificare, "SUCCESS: Monitorul a fost notificat despre noul raport ID %d.\n", report.id);
+        } else {
+            sprintf(mesaj_notificare, "EROARE: Monitorul nu a putut fi informat despre raportul ID %d (PID lipsa sau proces inchis).\n", report.id);
+        }
+
+        write(fd_log, mesaj_notificare, strlen(mesaj_notificare));
+        close(fd_log);
+    }
+
 };
 
 void printeaza_bucata(int cifra) {
@@ -253,39 +292,39 @@ void do_list(){
 
     struct stat st;
     if (stat(filepath, &st) == -1) {
-        perror("Nu am gasit fisierul reports.dat!\n");
+        perror("Didnt file the file reports.dat!\n");
         return;
     }
 
-    printf("\n INFO FISIER \n");
-    printf("Permisiuni: ");
+    printf("\n INFO FILE \n");
+    printf("Permisions:: ");
     print_permissions(st.st_mode);
 
-    printf("\nMarime: %ld bytes\n", st.st_size);
-    printf("Ultima modificare: %s", ctime(&st.st_mtime));
+    printf("\nSize: %ld bytes\n", st.st_size);
+    printf("Last modification: %s", ctime(&st.st_mtime));
     printf("\n\n");
 
     int fd = open(filepath, O_RDONLY);
     if (fd == -1) {
-        perror("Eroare la deschiderea fisierului reports.dat!\n");
+        perror("Error at opening the file reports.dat!\n");
         return;
     }
 
     Report report;
     int numar_rapoarte = 0;
 
-    printf("Lista Rapoarte \n");
+    printf("Reports list \n");
 
     while(read(fd, &report, sizeof(Report)) == sizeof(Report)) {
         numar_rapoarte++;
-        printf("ID: %d | Inspector: %s | Severitate: %d\n", report.id, report.inspector_name, report.severity);
-        printf("GPS: %.2f, %.2f | Categoria: %s\n", report.latitude, report.longitude, report.category);
-        printf("Descriere: %s\n", report.description);
+        printf("ID: %d | Inspector: %s | Severity: %d\n", report.id, report.inspector_name, report.severity);
+        printf("GPS: %.2f, %.2f | Category: %s\n", report.latitude, report.longitude, report.category);
+        printf("Description: %s\n", report.description);
         printf("\n");
     }
 
     if(numar_rapoarte == 0) {
-        printf("Nu exista rapoarte in districtul s%s.\n", district);
+        printf("There are no reports in districtul %s.\n", district);
     }
 
     close(fd);
@@ -301,7 +340,7 @@ void do_view(){
 
     int fd = open(filepath, O_RDONLY);
     if (fd == -1) {
-        printf("Nu am gasit fisierul reports.dat in districtul %s!\n", district);
+        printf("Didnt find the file reports.dat in district %s!\n", district);
         return;
     }
 
@@ -315,13 +354,13 @@ void do_view(){
             raport_gasit = 1;
 
 
-            printf("\n DETALII RAPORT ID %d\n", report.id);
+            printf("\n Details report ID %d\n", report.id);
             printf("Inspector: %s\n", report.inspector_name);
-            printf("Data si ora: %s", ctime(&report.timestamp));
+            printf("Date and time: %s", ctime(&report.timestamp));
             printf("GPS: %.2f, %.2f\n", report.latitude, report.longitude);
-            printf("Categoria: %s\n", report.category);
-            printf("Severitate: %d\n", report.severity);
-            printf("Descriere: %s\n", report.description);
+            printf("Category: %s\n", report.category);
+            printf("Severity: %d\n", report.severity);
+            printf("Description: %s\n", report.description);
             printf("\n");
             break;
 
@@ -329,7 +368,7 @@ void do_view(){
     }
 
     if (raport_gasit == 0){
-        printf("Nu am gasit raportul cu ID %d in districtul %s!\n", target_id, district);
+        printf("Didnt find the report with the ID %d in district %s!\n", target_id, district);
     }
 
     close(fd);
@@ -339,7 +378,7 @@ void do_remove_report(){
 
     int target_id = atoi(variabila_extra);
 
-    printf("Incerc sa sterg raportul %d\n", target_id);
+    printf("Trying to delete the report %d\n", target_id);
 
 
     char filepath[150];
@@ -348,7 +387,7 @@ void do_remove_report(){
 
     int fd= open(filepath, O_RDWR);
     if (fd == -1) {
-        perror("Nu am gasit fisierul vechi!\n");
+        perror("Didnt find the old file!\n");
         return;
     }
 
@@ -366,7 +405,7 @@ void do_remove_report(){
         }
     }
     if (gasit == 0) {
-        printf("Nu am gasit raportul %d!\n", target_id);
+        printf("Didnt find the report %d!\n", target_id);
         close(fd);
         return;
     }
@@ -389,13 +428,13 @@ void do_remove_report(){
 
     ftruncate(fd,write_cursor);
     close(fd);
-    printf("Raportul cu id %d a fost sters cu succes\n", target_id);
+    printf("The report with the id was deleted with success\n", target_id);
 };
 
 void do_update_threshold() {
     // Verificam rolul: doar managerul are voie!
     if (strcmp(role, "manager") != 0) {
-        printf("Eroare: Doar utilizatorii cu rolul 'manager' pot actualiza pragul!\n");
+        printf("Error: Only managers can update the threshold!\n");
         return;
     }
 
@@ -405,7 +444,7 @@ void do_update_threshold() {
     // Verificam permisiunile cu stat()
     struct stat st;
     if (stat(filepath, &st) == -1) {
-        printf("Eroare: Nu am putut gasi fisierul %s.\n", filepath);
+        printf("Error: Couldnt find the file %s.\n", filepath);
         return;
     }
 
@@ -424,7 +463,7 @@ void do_update_threshold() {
     // Deschidem fisierul DOAR pentru scriere, stergand ce era inainte (O_TRUNC)
     int fd = open(filepath, O_WRONLY | O_TRUNC);
     if (fd == -1) {
-        printf("Eroare: Nu am putut deschide %s pentru scriere.\n", filepath);
+        printf("Error: Couldnt open the %s for writing\n", filepath);
         return;
     }
 
@@ -513,11 +552,9 @@ void do_filter() {
     close(fd);
 }
 
-
-
 void do_remove_district() {
     if (strcmp(role, "manager") != 0) {
-        printf("Eroare: doar managerii");
+        printf("Eroare: doar managerii au voie sa stearga un district!\n");
         return;
     }
 
@@ -534,7 +571,17 @@ void do_remove_district() {
     else {
         int status;
         waitpid(pid, &status, 0);
-        printf("Districtul '%s' a fost sters cu succes\n", district);
+        printf("Districtul '%s' a fost sters cu succes.\n", district);
+
+        // --- Adaugat pentru a sterge si symlink-ul ---
+        char symlink_name[150];
+        sprintf(symlink_name, "active_reports-%s", district);
+
+        if (unlink(symlink_name) == 0) {
+            printf("Link-ul simbolic '%s' a fost de asemenea sters.\n", symlink_name);
+        } else {
+            perror("Avertisment: Nu am putut sterge link-ul simbolic");
+        }
     }
 }
 
@@ -599,7 +646,7 @@ int main(int argc, char *argv[]) {
             if (st.st_mode & S_IWUSR) { // S_IWUSR verifica daca Owner-ul (Managerul) are drept de scriere
                 are_voie_sa_scrie = 1;
             }
-        } 
+        }
         else if (strcmp(role, "inspector") == 0) {
             if (st.st_mode & S_IWGRP) { // S_IWGRP verifica daca Grupul (Inspectorul) are drept de scriere
                 are_voie_sa_scrie = 1;
@@ -609,7 +656,7 @@ int main(int argc, char *argv[]) {
         // Daca nu are permisiunea, detectam si refuzam cu un mesaj clar
         if (are_voie_sa_scrie == 0) {
             printf("Avertisment permisiuni: Rolul '%s' nu are drept de scriere in logged_district!\n", role);
-        } 
+        }
         else {
             // Daca are voie, deschidem si scriem (O_APPEND ca sa adaugam la final)
             int fd_log = open(log_filepath, O_WRONLY | O_APPEND);
@@ -617,7 +664,7 @@ int main(int argc, char *argv[]) {
                 char log_entry[300];
                 // Construim textul log-ului: timestamp, user, rol comanda
                 sprintf(log_entry, "%ld\n%s\n%s %s\n", time(NULL), user, role, command);
-                
+
                 write(fd_log, log_entry, strlen(log_entry));
                 close(fd_log);
             }

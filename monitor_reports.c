@@ -58,9 +58,16 @@ int main() {
         return -1;
     }
 
+    while (keep_running) {
+        pause();
+    }
 
-
-
+    if (unlink(PID_FILE) == -1) {
+        perror("Error: at deleting the PID file .monitor_pid\n");
+    }
+    else {
+        printf("PID file %s successfully deleted\n", PID_FILE);
+    }
 
     return 0;
 }

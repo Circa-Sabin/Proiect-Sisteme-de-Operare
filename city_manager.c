@@ -428,7 +428,7 @@ void do_remove_report(){
 
     ftruncate(fd,write_cursor);
     close(fd);
-    printf("The report with the id was deleted with success\n", target_id);
+    printf("The report with the id %d was deleted with success\n", target_id);
 };
 
 void do_update_threshold() {

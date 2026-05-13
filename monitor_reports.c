@@ -18,13 +18,33 @@ void handle_signal(int sig) {
         keep_running = 0;
     }
     else if (sig == SIGUSR1) {
-        char msg[] = "Signal SIGUSR1 received: A new report has been added to the system!\n";
+        char msg[] = "\nSignal SIGUSR1 received: A new report has been added to the system!\n";
         write(STDOUT_FILENO, msg, strlen(msg) - 1);
     }
 }
 
 int main() {
+
     pid_t my_pid = getpid();
+
+    int existing_fd = open(PID_FILE, O_RDONLY);
+    if (existing_fd >= 0) {
+        char buf[20];
+        int n = read(existing_fd, buf, sizeof(buf) - 1); // citeste pana la -1 ca sa marcam noi ca e finalul citit
+        if (n > 0) {
+            buf[n] = '\0'; // aici marcam finalul dupa ultimul caracter citit
+            pid_t old_pid = atoi(buf);
+            // kill(pid, 0) verifica daca un proces cu acel PID inca mai ruleaza
+            if (kill(old_pid, 0) == 0) {
+                char err_msg[100];
+                sprintf(err_msg, "Eroare: Un monitor ruleaza deja cu PID-ul %d!\n", old_pid);
+                write(STDOUT_FILENO, err_msg, strlen(err_msg)); // Se duce prin pipe catre hub
+                close(existing_fd);
+                return 1; // Ne oprim
+            }
+        }
+        close(existing_fd);
+    }
 
     int fd = open(PID_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
